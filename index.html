@@ -152,19 +152,6 @@
                          <div id="piece-palette" class="grid grid-cols-6 gap-2 bg-gray-900 p-2 rounded-lg">
                             <!-- Piece palette will be generated here -->
                          </div>
-                         <div>
-                            <h3 class="text-xl font-semibold mb-2">Session ID</h3>
-                            <div class="bg-gray-900 p-2 rounded-lg text-center">
-                                <span id="session-id-display" class="font-mono text-lg text-yellow-300"></span>
-                            </div>
-                        </div>
-                         <div>
-                            <h3 class="text-xl font-semibold mb-2">Join Session</h3>
-                            <div class="flex gap-2">
-                                <input type="text" id="join-session-input" class="w-full bg-gray-700 text-white rounded-lg p-2 text-sm" placeholder="Paste ID...">
-                                <button id="join-session-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold p-2 rounded-lg">Join</button>
-                            </div>
-                        </div>
                         <div>
                             <h3 class="text-xl font-semibold mb-2">Turn</h3>
                             <div id="turn-selector" class="flex bg-gray-900 rounded-lg p-1">
@@ -185,12 +172,7 @@
         </div>
     </div>
     
-    <script type="module">
-        // --- Firebase Imports ---
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
+    <script>
         // --- DOM Elements ---
         const getEl = (id) => document.getElementById(id);
         const gameStatusElement = getEl('game-status');
@@ -209,14 +191,6 @@
         const flipBoardBtn = getEl('flip-board-btn');
         const fenPrefix = getEl('fen-prefix');
         const piecePalette = getEl('piece-palette');
-        const sessionIdDisplay = getEl('session-id-display');
-        const joinSessionInput = getEl('join-session-input');
-        const joinSessionBtn = getEl('join-session-btn');
-        
-        // --- Firebase State ---
-        let db, auth;
-        let currentSessionId = null;
-        let unsubscribeFromSession = null;
 
         // --- Game State ---
         let chess = new Chess();
@@ -240,29 +214,6 @@
             'bK', 'bQ', 'bR', 'bB', 'bN', 'bP',
             null // Eraser
         ];
-
-        // --- Firebase Initialization ---
-        async function initFirebase() {
-            const firebaseConfig = {
-                apiKey: "AIzaSyDOrHW9k1CdK0pEGEFHv1L6n6MHuZcAQuY",
-                authDomain: "chesstool-7ffb9.firebaseapp.com",
-                projectId: "chesstool-7ffb9",
-                storageBucket: "chesstool-7ffb9.appspot.com",
-                messagingSenderId: "281727838019",
-                appId: "1:281727838019:web:8dfdafdce812c7dd98b1f6",
-                measurementId: "G-PGJ3YNKMVT"
-            };
-            
-            try {
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                await signInAnonymously(auth);
-            } catch (e) {
-                console.error("Firebase initialization failed:", e);
-                alert('Could not connect to the collaboration service. Error: ' + e.message);
-            }
-        }
 
         // --- Core Logic ---
 
@@ -327,6 +278,7 @@
             lastMoveElement.textContent = move.san;
             renderBoard();
             updateGameStatus();
+            copyFenToClipboard();
         }
         
         function highlightPossibleMoves(fromSquare) {
@@ -359,24 +311,16 @@
 
         // --- Board Setup Logic ---
 
-        async function showSetupModal() {
+        function showSetupModal() {
             document.body.classList.add('modal-open');
             setupModal.classList.remove('hidden');
             renderSetupBoard();
             populateLabels('setup-rank-labels', 'setup-file-labels', isSetupBoardFlipped);
-            if (db) {
-                await createNewSession();
-            }
         }
 
         function hideSetupModal() {
             document.body.classList.remove('hidden');
             setupModal.classList.add('hidden');
-            if (unsubscribeFromSession) {
-                unsubscribeFromSession();
-                unsubscribeFromSession = null;
-            }
-            currentSessionId = null;
         }
 
         function renderSetupBoard() {
@@ -416,9 +360,6 @@
                     });
                 });
                 renderSetupBoard();
-                if(currentSessionId) {
-                    updateSessionInDb();
-                }
             } catch (e) {
                  console.error("Invalid FEN:", e);
             }
@@ -467,63 +408,16 @@
             fenPrefix.textContent = 'Suggest best move for ' + turnColor;
             mainFenDisplay.value = chess.fen();
         }
-        
-        // --- Firebase Session Logic ---
-        async function createNewSession() {
-            if (!db) return;
-            if (unsubscribeFromSession) unsubscribeFromSession();
-            
-            try {
-                const newId = String(Math.floor(1000 + Math.random() * 9000));
-                const sessionRef = doc(db, "sessions", newId);
-                await setDoc(sessionRef, { boardState: {} });
 
-                currentSessionId = newId;
-                sessionIdDisplay.textContent = currentSessionId;
-                listenToSession(currentSessionId);
-            } catch (e) {
-                console.error("Error creating session:", e);
-                alert("Could not create a new collaborative session.");
-            }
-        }
-
-        function joinSession() {
-            if (!db) return;
-            const idToJoin = joinSessionInput.value.trim();
-            if (idToJoin) {
-                if (unsubscribeFromSession) unsubscribeFromSession();
-                currentSessionId = idToJoin;
-                sessionIdDisplay.textContent = currentSessionId;
-                listenToSession(currentSessionId);
-                joinSessionInput.value = "";
-            }
-        }
-
-        function listenToSession(sessionId) {
-            if (!db) return;
-            const sessionRef = doc(db, "sessions", sessionId);
-            unsubscribeFromSession = onSnapshot(sessionRef, (doc) => {
-                if (doc.exists()) {
-                    const data = doc.data();
-                    setupBoardState = data.boardState || {};
-                    renderSetupBoard();
-                } else {
-                    console.warn("Session does not exist.");
-                    alert("The entered Session ID does not exist.");
-                    if(unsubscribeFromSession) unsubscribeFromSession();
-                    createNewSession(); // Create a new session for this user
-                }
-            });
-        }
-
-        async function updateSessionInDb() {
-            if (!db || !currentSessionId) return;
-            const sessionRef = doc(db, "sessions", currentSessionId);
-            try {
-                await setDoc(sessionRef, { boardState: setupBoardState });
-            } catch (e) {
-                console.error("Error updating session:", e);
-            }
+        function copyFenToClipboard() {
+            const turnColor = chess.turn() === 'w' ? 'White' : 'Black';
+            const textToCopy = 'Suggest best move for ' + turnColor + ' - ' + chess.fen();
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = textToCopy;
+            document.body.appendChild(tempTextArea);
+            tempTextArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempTextArea);
         }
 
         function populateLabels(rankId, fileId, isFlipped = false) {
@@ -564,9 +458,6 @@
                     setupBoardState[target.dataset.square] = selectedPalettePiece;
                 }
                 renderSetupBoard();
-                if (currentSessionId) {
-                    updateSessionInDb();
-                }
             }
         });
 
@@ -595,7 +486,6 @@
         clearBoardBtn.addEventListener('click', () => {
             setupBoardState = {};
             renderSetupBoard();
-            if(currentSessionId) updateSessionInDb();
         });
 
         resetStandardBtn.addEventListener('click', () => {
@@ -603,22 +493,12 @@
         });
 
         mainCopyFenBtn.addEventListener('click', () => {
-            const turnColor = chess.turn() === 'w' ? 'White' : 'Black';
-            const textToCopy = 'Suggest best move for ' + turnColor + ' - ' + chess.fen();
-            const tempTextArea = document.createElement('textarea');
-            tempTextArea.value = textToCopy;
-            document.body.appendChild(tempTextArea);
-            tempTextArea.select();
-            document.execCommand('copy');
-            document.body.removeChild(tempTextArea);
-
+            copyFenToClipboard();
             mainCopyFenBtn.textContent = 'Copied!';
             setTimeout(() => {
                 mainCopyFenBtn.textContent = 'Copy';
             }, 1500);
         });
-
-        joinSessionBtn.addEventListener('click', joinSession);
 
         startGameBtn.addEventListener('click', () => {
             const fen = generateFenFromSetup();
@@ -634,12 +514,9 @@
         });
 
         // --- Initial Load ---
-        initFirebase().then(() => {
-            renderBoard();
-            populateLabels('main-rank-labels', 'main-file-labels');
-            gameStatusElement.textContent = 'Click "Setup Board" to begin!';
-        });
-
+        renderBoard();
+        populateLabels('main-rank-labels', 'main-file-labels');
+        
         PALETTE_PIECES.forEach(pieceKey => {
             const pieceEl = document.createElement('div');
             pieceEl.className = 'palette-piece p-1 flex items-center justify-center';
